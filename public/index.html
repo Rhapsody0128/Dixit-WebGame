@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>妙語說書人 · 線上桌遊</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=LXGW+WenKai+TC:wght@400;700&family=Shippori+Mincho:wght@600;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="noise" aria-hidden="true"></div>
+    <header class="top">
+      <div class="brand">
+        <span class="brand-mark">卷</span>
+        <div>
+          <h1>妙語說書人</h1>
+          <p class="tagline">一句提示，萬象生花 · 與好友即時連線</p>
+        </div>
+      </div>
+      <div class="top-actions" role="toolbar" aria-label="連線與音效">
+        <button type="button" id="btn-sfx-toggle" class="btn-sfx-toggle" aria-pressed="false" title="關閉後不再播放操作音效">
+          音效：開
+        </button>
+        <div id="conn-pill" class="pill pill-offline">離線</div>
+      </div>
+    </header>
+
+    <div class="app-columns">
+      <div class="app-main">
+    <main class="layout">
+      <section id="panel-lobby" class="card panel">
+        <h2>進入劇場</h2>
+        <label class="field">
+          <span>暱稱</span>
+          <input id="input-name" type="text" maxlength="12" placeholder="例如：夜鶯" autocomplete="nickname" />
+        </label>
+        <div class="row-actions">
+          <button type="button" id="btn-create" class="btn primary">建立新房間</button>
+        </div>
+        <hr class="sep" />
+        <label class="field">
+          <span>房間碼</span>
+          <input id="input-room" type="text" maxlength="6" placeholder="六位英數" autocomplete="off" />
+        </label>
+        <button type="button" id="btn-join" class="btn ghost">加入房間</button>
+        <p class="hint micro-print">
+          網址列使用 <code>#/r/房間碼</code> 記住房間；重整後會依本機紀錄自動接回（約五分鐘內有效）。
+        </p>
+        <p class="hint row-lobby-tools">
+          <button type="button" id="btn-clear-session" class="linkish">清除本機房間紀錄</button>
+        </p>
+        <p id="hint-lobby" class="hint"></p>
+      </section>
+
+      <section id="panel-room" class="card panel hidden">
+        <div class="room-head">
+          <h2>等候廳</h2>
+          <div id="room-code-display" class="room-code"></div>
+        </div>
+        <p class="lead">
+          將房間碼傳給朋友；<strong id="min-p">3</strong>–<strong id="max-p">6</strong> 人即可開局。房主按「開始遊戲」。
+        </p>
+        <ul id="player-list" class="player-list"></ul>
+        <div id="block-deck" class="deck-block hidden">
+          <hr class="sep" />
+          <h3 class="sub">圖庫</h3>
+          <p id="deck-active-label" class="hint micro"></p>
+          <div id="deck-host-controls" class="hidden">
+            <label class="field">
+              <span>使用圖庫</span>
+              <select id="select-card-deck"></select>
+            </label>
+            <div class="row-actions deck-deck-row-main">
+              <button type="button" id="btn-apply-deck" class="btn ghost">套用圖庫</button>
+              <button type="button" id="btn-deck-gen-toggle" class="btn ghost">展開：產製圖庫…</button>
+            </div>
+            <div id="deck-gen-collapsible" class="deck-gen-collapsible hidden">
+              <div id="deck-gen-panel" class="deck-gen-panel">
+                <section class="deck-prompt-block" aria-labelledby="deck-prompt-heading">
+                  <h4 id="deck-prompt-heading" class="deck-prompt-heading">產圖提示詞</h4>
+                  <p class="micro deck-ai-note">
+                    <strong>你只要填畫風／意象。</strong>系統提示已包含：單張 3×3 無縫九宮、格線對齊、牌面<strong>內縮留白</strong>、說書人式一圖多義、禁文字等。
+                  </p>
+                  <label class="field">
+                    <span>風格與主題（併入送給 AI 的 [F] 區）</span>
+                    <textarea
+                      id="input-deck-style"
+                      rows="4"
+                      maxlength="800"
+                      placeholder="例如：暖色粉彩、童話邊陲、柔焦光影、略帶超現實…"
+                      autocomplete="off"
+                    ></textarea>
+                  </label>
+                </section>
+
+                <section class="deck-api-block" aria-label="OpenAI 與存檔">
+                  <p class="micro deck-openai-link-row">
+                    <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" class="linkish"
+                      >取得 OpenAI API 金鑰</a
+                    >
+                    <span class="deck-openai-link-note">（新分頁開啟）</span>
+                  </p>
+                  <label class="field">
+                    <span>OpenAI API 金鑰（僅此請求使用，不會存進伺服器檔案）</span>
+                    <input
+                      id="input-openai-api-key"
+                      type="password"
+                      maxlength="500"
+                      placeholder="sk-…"
+                      autocomplete="off"
+                      spellcheck="false"
+                    />
+                  </label>
+                  <p class="micro deck-key-hint">金鑰只會用來呼叫 OpenAI 產<strong>一張</strong>九宮圖；請勿與他人分享畫面。</p>
+                  <label class="field">
+                    <span>卡組資料夾名稱（英數與連字；會建立或沿用 <code>data/名稱/</code>，並寫入一張 JPG）</span>
+                    <input id="input-deck-name" type="text" maxlength="40" placeholder="my-deck" autocomplete="off" />
+                  </label>
+                  <button type="button" id="btn-generate-deck" class="btn primary">產製一張九宮並存入卡組</button>
+                  <p id="deck-gen-status" class="hint micro hidden"></p>
+                </section>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="row-actions row-actions-split">
+          <button type="button" id="btn-start" class="btn primary hidden">開始遊戲</button>
+          <button type="button" class="btn ghost btn-leave-room">離開房間</button>
+        </div>
+        <p id="hint-room" class="hint"></p>
+      </section>
+
+      <section id="panel-game" class="card panel hidden">
+        <div class="game-head">
+          <div class="game-head-row">
+            <h2 id="phase-title">遊戲中</h2>
+            <button type="button" class="btn ghost btn-leave-room">離開房間</button>
+          </div>
+          <div id="score-strip" class="scores"></div>
+          <p id="game-deck-hint" class="game-deck-hint micro hidden"></p>
+        </div>
+        <p id="phase-desc" class="lead"></p>
+        <p id="clue-display" class="clue hidden"></p>
+
+        <div id="block-clue" class="game-block hidden">
+          <label class="field">
+            <span>你的提示（與所選圖卡共鳴）</span>
+            <input id="input-clue" type="text" maxlength="120" placeholder="一個詞、一句話、一段聲音的意象…" />
+          </label>
+          <p class="micro">點選一張手牌後送出。</p>
+          <button type="button" id="btn-send-clue" class="btn primary">送出提示與圖卡</button>
+        </div>
+
+        <div id="block-hand" class="game-block">
+          <h3 class="sub">我的手牌</h3>
+          <div class="hand-zone" aria-label="手牌區">
+            <div id="hand" class="hand hand--fan"></div>
+          </div>
+          <div class="hand-actions">
+            <button type="button" id="btn-send-card" class="btn primary hidden">確定送出此牌</button>
+          </div>
+        </div>
+
+        <div id="block-submit-wait" class="game-block hidden">
+          <p class="waiting">等待其他玩家選牌…</p>
+        </div>
+
+        <div id="block-vote" class="game-block hidden">
+          <h3 class="sub">哪一張才是說書人的牌？</h3>
+          <div id="vote-grid" class="vote-grid"></div>
+          <div id="vote-actions" class="vote-actions hidden">
+            <button type="button" id="btn-vote-confirm-pick" class="btn secondary" disabled>第一步：確認選擇此圖</button>
+            <button type="button" id="btn-vote-submit" class="btn primary" disabled>第二步：確定送出投票</button>
+          </div>
+          <p id="vote-wait" class="waiting hidden">已投票，等待其他人…</p>
+        </div>
+
+        <div id="block-summary" class="game-block summary hidden"></div>
+
+        <div id="block-game-over" class="game-block game-over hidden" aria-live="polite">
+          <h3 class="sub">遊戲結束 · 得分</h3>
+          <p id="game-over-lead" class="lead game-over-lead"></p>
+          <p class="micro game-over-rule">
+            結束條件：任一玩家達 <strong id="game-over-win-score">30</strong> 分，或牌庫無法再補滿所有人的手牌。
+          </p>
+          <ol id="game-over-ranks" class="game-over-ranks"></ol>
+          <div class="game-over-actions">
+            <button type="button" id="btn-return-lobby" class="btn primary hidden">返回等候廳（房主）</button>
+            <p id="game-over-wait-host" class="waiting hidden">請等待房主返回等候廳以開始新一場。</p>
+          </div>
+        </div>
+      </section>
+    </main>
+      </div>
+
+      <aside id="chat-dock" class="chat-dock hidden" aria-label="房間聊天">
+        <div class="chat-dock-head">
+          <h2 class="chat-title">房間聊天</h2>
+          <p class="chat-sub">僅此房間內即時顯示</p>
+        </div>
+        <div id="chat-log" class="chat-log" role="log" aria-live="polite"></div>
+        <div class="emoji-drawer emoji-drawer--chat">
+          <button type="button" id="btn-chat-emoji-toggle" class="emoji-drawer-toggle" aria-expanded="false" aria-controls="chat-emoji-panel">😊 表情</button>
+          <div id="chat-emoji-panel" class="emoji-drawer-panel hidden" role="group" aria-label="表情選單"></div>
+        </div>
+        <p class="chat-emoji-hint">點「表情」展開；訊息框內也可貼系統表情。</p>
+        <div class="chat-compose">
+          <input
+            id="chat-input"
+            type="text"
+            maxlength="300"
+            placeholder="說點什麼…（可含表情）"
+            autocomplete="off"
+            aria-label="聊天訊息"
+          />
+          <button type="button" id="btn-chat-send" class="btn primary chat-send">送出</button>
+        </div>
+      </aside>
+    </div>
+
+    <div id="toast" class="toast hidden" role="status"></div>
+
+    <div id="vote-result-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="vote-result-title">
+      <div class="modal-backdrop"></div>
+      <div class="modal-card">
+        <h2 id="vote-result-title" class="modal-title">本回合結算</h2>
+        <p id="vote-result-my" class="modal-my"></p>
+        <p id="vote-result-sub" class="modal-sub"></p>
+        <button type="button" id="vote-result-toggle-detail" class="btn ghost modal-toggle-detail">展開：誰選了誰的牌</button>
+        <div id="vote-result-detail" class="vote-result-detail hidden">
+          <p id="vote-result-rule" class="modal-rule"></p>
+          <div id="vote-result-body" class="vote-result-body"></div>
+          <div id="vote-result-story-box" class="modal-story-box hidden">
+            <h3 class="modal-story-title">上一回合說書人專區</h3>
+            <ul id="vote-result-story-list" class="modal-list"></ul>
+          </div>
+        </div>
+        <button type="button" id="vote-result-close" class="btn primary modal-close-btn">知道了</button>
+      </div>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
