@@ -13,7 +13,14 @@ import {
   toggleSfxMuted,
 } from "./ui-sounds.js";
 
-const WS_PATH = "/ws";
+/** 應用程式路徑前綴（GitHub Pages 專案頁如 /repo-name）；本機由根目錄提供時為 '' */
+const APP_BASE = new URL(".", import.meta.url).pathname.replace(/\/$/, "");
+
+function appUrl(path) {
+  if (!path || path.startsWith("http://") || path.startsWith("https://") || path.startsWith("data:")) return path;
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return `${APP_BASE}${p}`;
+}
 const SESSION_KEY = "miaoyu_session_v1";
 const MAX_RECONNECT = 15;
 
@@ -88,7 +95,7 @@ let deckGenPanelExpanded = false;
 
 function wsUrl() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${location.host}${WS_PATH}`;
+  return `${proto}//${location.host}${appUrl("/ws")}`;
 }
 
 function toast(msg) {
@@ -728,7 +735,7 @@ function renderHand(state, mode) {
     const inner = document.createElement("div");
     inner.className = "card-tile-inner";
     const img = document.createElement("img");
-    img.src = item.imageUrl;
+    img.src = appUrl(item.imageUrl);
     img.alt = `圖卡 ${item.cardId}`;
     img.loading = "lazy";
     inner.appendChild(img);
@@ -827,7 +834,7 @@ function renderVote(state, imStory) {
     const media = document.createElement("div");
     media.className = "vote-slot-media";
     const img = document.createElement("img");
-    img.src = s.imageUrl;
+    img.src = appUrl(s.imageUrl);
     img.alt = `選項 ${s.slotIndex + 1}`;
     img.draggable = false;
     media.appendChild(img);
@@ -1033,7 +1040,7 @@ el("btn-generate-deck").addEventListener("click", async () => {
   status.textContent = "產圖中（單張 3×3 九宮，將存入卡組資料夾並切出 9 張牌）…";
   btn.disabled = true;
   try {
-    const r = await fetch("/api/generate-deck", {
+    const r = await fetch(appUrl("/api/generate-deck"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
