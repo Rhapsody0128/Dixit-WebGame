@@ -2,11 +2,12 @@ import { randomBytes, randomUUID } from "crypto";
 import path from "path";
 import {
   DATA_DIR,
+  GAME_POOL_MAX,
   deckFolderExists,
   getDeckCardCount,
-  getDeckSheetCount,
+  getDeckImageCount,
   listDeckKeys,
-  listDeckSheetFiles,
+  listDeckImageFiles,
   pickDefaultDeckKey,
   resolveDeckFolder,
 } from "./spriteDeck.js";
@@ -65,6 +66,7 @@ export class GameRoom {
     this.slotToPlayerId = [];
     this.votes = new Map();
     this.lastRoundSummary = null;
+    this.nextRoundReady = new Set();
     this.chatMessages = [];
     this.slotReactions = [];
     this.cardDeck = pickDefaultDeckKey(DATA_DIR);
@@ -81,7 +83,7 @@ export class GameRoom {
     if (this.phase !== "lobby") return { error: "僅在等候廳可更換圖庫" };
     if (playerId !== this.hostId) return { error: "僅房主可設定圖庫" };
     const folder = resolveDeckFolder(DATA_DIR, deckKey);
-    if (!folder || listDeckSheetFiles(folder).length === 0) {
+    if (!folder || listDeckImageFiles(folder).length === 0) {
       return { error: "找不到該圖庫資料夾（請確認 data/{卡組名}/ 內有 JPG／PNG／WebP）" };
     }
     this.cardDeck = path.basename(folder);
@@ -185,6 +187,7 @@ export class GameRoom {
     this.votes.clear();
     this.slotReactions = [];
     this.lastRoundSummary = reason ? { message: reason } : null;
+    this.nextRoundReady.clear();
     for (const pl of this.players.values()) {
       pl.hand = [];
       pl.score = 0;
@@ -196,17 +199,20 @@ export class GameRoom {
     if (playerId !== this.hostId) return { error: "只有房主可以開始" };
     if (this.players.size < MIN_PLAYERS) return { error: `至少需要 ${MIN_PLAYERS} 位玩家` };
     if (!deckFolderExists(DATA_DIR, this.cardDeck)) {
-      return { error: "找不到圖庫資料夾（data/），請房主先套用或產製圖庫" };
+      return { error: "找不到圖庫資料夾（data/），請房主先套用圖庫或上傳圖檔" };
     }
-    const total = getDeckCardCount(DATA_DIR, this.cardDeck);
+    const totalInFolder = getDeckCardCount(DATA_DIR, this.cardDeck);
+    const poolSize = Math.min(GAME_POOL_MAX, totalInFolder);
     const minNeeded = this.players.size * HAND_SIZE + 16;
-    if (total < minNeeded) {
+    if (poolSize < minNeeded) {
       return {
-        error: `圖庫牌張不足：目前 ${total} 張（約需 ${minNeeded} 張以上才能順利遊玩），請在該卡組資料夾放入更多 3×3 九宮圖檔`,
+        error: `圖庫可用牌張不足：本局最多使用 ${GAME_POOL_MAX} 張（實際 ${poolSize} 張），約需 ${minNeeded} 張以上才能遊玩，請在 data/${this.cardDeck}/ 放入更多圖檔`,
       };
     }
 
-    this.deck = shuffle(Array.from({ length: total }, (_, i) => i + 1));
+    const allIds = Array.from({ length: totalInFolder }, (_, i) => i + 1);
+    const picked = shuffle(allIds).slice(0, poolSize);
+    this.deck = shuffle(picked);
     for (const pl of this.players.values()) {
       pl.hand = [];
       pl.score = 0;
@@ -228,6 +234,7 @@ export class GameRoom {
     this.votes.clear();
     this.slotReactions = [];
     this.lastRoundSummary = null;
+    this.nextRoundReady.clear();
     this.gameOver = null;
     return {};
   }
@@ -262,7 +269,30 @@ export class GameRoom {
       messageZh,
     };
     this.lastRoundSummary = roundSummary;
+    this.nextRoundReady.clear();
     this.appendSystemChat(messageZh);
+  }
+
+  confirmNextRound(playerId) {
+    if (this.phase !== "round_summary") return { error: "目前不能進入下一回合" };
+    if (!this.players.has(playerId)) return { error: "找不到玩家" };
+    this.nextRoundReady.add(playerId);
+    if (this.nextRoundReady.size >= this.players.size) this.advanceToNextRound();
+    return {};
+  }
+
+  advanceToNextRound() {
+    this.storytellerIndex = (this.storytellerIndex + 1) % this.players.size;
+    this.phase = "clue";
+    this.currentClue = "";
+    this.storytellerCard = null;
+    this.submissions.clear();
+    this.revealOrder = [];
+    this.slotToPlayerId = [];
+    this.votes.clear();
+    this.slotReactions = [];
+    this.lastRoundSummary = null;
+    this.nextRoundReady.clear();
   }
 
   getStorytellerId() {
@@ -407,8 +437,11 @@ export class GameRoom {
     for (let s = 0; s < this.revealOrder.length; s++) {
       const oid = this.slotToPlayerId[s];
       const oname = this.players.get(oid)?.name ?? "?";
+      const cardId = this.revealOrder[s];
       bySlot.push({
         slotIndex: s,
+        cardId,
+        imageUrl: cardUrl(cardId, this.cardDeck),
         ownerName: oname,
         isStorytellerCard: oid === storytellerId,
         voterNames: [...(slotVoters.get(s) || [])],
@@ -456,16 +489,9 @@ export class GameRoom {
       return summary;
     }
 
-    this.storytellerIndex = (this.storytellerIndex + 1) % this.players.size;
-    this.phase = "clue";
-    this.currentClue = "";
-    this.storytellerCard = null;
-    this.submissions.clear();
-    this.revealOrder = [];
-    this.slotToPlayerId = [];
-    this.votes.clear();
-    this.slotReactions = [];
+    this.phase = "round_summary";
     this.lastRoundSummary = summary;
+    this.nextRoundReady.clear();
     return summary;
   }
 
@@ -499,12 +525,14 @@ export class GameRoom {
       currentClue: this.phase === "submit" || this.phase === "vote" ? this.currentClue : "",
       lastRoundSummary: this.lastRoundSummary,
       cardDeck: this.cardDeck,
-      availableDecks: listDeckKeys(DATA_DIR).map((key) => ({
-        key,
-        sheets: getDeckSheetCount(DATA_DIR, key),
-        cards: getDeckCardCount(DATA_DIR, key),
-      })),
-      imageGenConfigured: true,
+      availableDecks: listDeckKeys(DATA_DIR).map((key) => {
+        const n = getDeckImageCount(DATA_DIR, key);
+        return {
+          key,
+          sheets: n,
+          cards: n,
+        };
+      }),
       winScoreTarget: WIN_SCORE,
     };
 
@@ -549,6 +577,29 @@ export class GameRoom {
           };
         }),
         myVoteDone: forPlayerId ? this.votes.has(forPlayerId) : false,
+        voteProgress: [...this.players.values()].map((p) => {
+          const canVote = p.id !== storytellerId;
+          return {
+            id: p.id,
+            name: p.name,
+            canVote,
+            done: canVote ? this.votes.has(p.id) : false,
+          };
+        }),
+      };
+    }
+
+    if (this.phase === "round_summary") {
+      return {
+        ...base,
+        myHand,
+        myNextRoundReady: forPlayerId ? this.nextRoundReady.has(forPlayerId) : false,
+        nextRoundReadyPlayers: [...this.nextRoundReady],
+        nextRoundProgress: [...this.players.values()].map((p) => ({
+          id: p.id,
+          name: p.name,
+          done: this.nextRoundReady.has(p.id),
+        })),
       };
     }
 
@@ -557,6 +608,14 @@ export class GameRoom {
       myHand,
       myHandImages: myHand.map((id) => ({ cardId: id, imageUrl: cardUrl(id, this.cardDeck) })),
       submitDone: forPlayerId ? this.submissions.has(forPlayerId) : false,
+      submitProgress:
+        this.phase === "submit"
+          ? [...this.players.values()].map((p) => ({
+              id: p.id,
+              name: p.name,
+              done: this.submissions.has(p.id),
+            }))
+          : [],
     };
   }
 }

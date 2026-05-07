@@ -4,22 +4,21 @@ import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 import express from "express";
+import multer from "multer";
 import sharp from "sharp";
 import { WebSocketServer } from "ws";
 import { randomBytes } from "crypto";
 import { GameRoom } from "./game.js";
 import {
-  fetchGeneratedSheetBuffer,
+  assertSafeDeckFolderName,
+  CARD_H,
+  CARD_W,
   DATA_DIR,
-  TILE_H,
-  TILE_W,
   getDeckCardCount,
-  getSheetCoverPosition,
-  resolveCardSlice,
+  isBaseDeckKey,
+  pickDefaultDeckKey,
+  resolveCardImageFile,
   resolveDeckFolder,
-  sanitizeDeckKey,
-  sheetPixelSize,
-  tileExtractRegionInSheet,
 } from "./spriteDeck.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -32,7 +31,7 @@ function isLanIPv4(addr) {
   return addr.family === "IPv4" || addr.family === 4;
 }
 const rooms = new Map();
-const sheetCache = new Map();
+const cardImageCache = new Map();
 const RECONNECT_GRACE_MS = 5 * 60 * 1000;
 const socketByPlayer = new Map();
 const disconnectTimers = new Map();
@@ -90,39 +89,43 @@ function broadcast(room) {
   }
 }
 
-function invalidateDeckSheetCache(deckKey) {
+function invalidateDeckImageCache(deckKey) {
   const folder = resolveDeckFolder(DATA_DIR, deckKey);
   if (!folder) return;
   const prefix = folder + path.sep;
-  for (const key of [...sheetCache.keys()]) {
-    if (key.startsWith(prefix) || key === folder) sheetCache.delete(key);
+  for (const key of [...cardImageCache.keys()]) {
+    if (key.startsWith(prefix) || key === folder) cardImageCache.delete(key);
   }
 }
 
-/** 將任意比例的精靈大圖套入固定畫素（與 /cards 裁切一致） */
-async function normalizeSheetImageBuffer(rawBuffer, jpegQuality) {
-  const { width, height } = sheetPixelSize();
-  const opts = { fit: "cover", position: getSheetCoverPosition() };
-  if (sharp.kernel?.lanczos3) opts.kernel = sharp.kernel.lanczos3;
-  return sharp(rawBuffer).resize(width, height, opts).jpeg({ quality: jpegQuality }).toBuffer();
-}
-
-/** 快取鍵為圖檔絕對路徑（mtime 變則重算 normalize） */
-async function getNormalizedSheetBufferForFile(fullPath) {
+/** 單張圖檔 → 固定牌面尺寸 WebP（mtime 變則重算） */
+async function getCardWebpBufferForFile(fullPath) {
   let st;
   try {
     st = await fs.stat(fullPath);
   } catch {
     return null;
   }
-  const hit = sheetCache.get(fullPath);
+  const hit = cardImageCache.get(fullPath);
   if (hit && hit.mtimeMs === st.mtimeMs) return hit.buffer;
 
   const raw = await fs.readFile(fullPath);
-  const buffer = await normalizeSheetImageBuffer(raw, 92);
-  sheetCache.set(fullPath, { mtimeMs: st.mtimeMs, buffer });
+  const buffer = await sharp(raw)
+    .resize(CARD_W, CARD_H, {
+      fit: "contain",
+      position: "center",
+      background: { r: 10, g: 8, b: 12 },
+    })
+    .webp({ quality: 86 })
+    .toBuffer();
+  cardImageCache.set(fullPath, { mtimeMs: st.mtimeMs, buffer });
   return buffer;
 }
+
+const uploadDeckImages = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 12 * 1024 * 1024, files: 120 },
+});
 
 function broadcastChat(room) {
   const chat = room.getChatSnapshot();
@@ -145,30 +148,16 @@ app.get("/cards/:deck/:cardId", async (req, res) => {
       res.status(400).end();
       return;
     }
-    const slice = resolveCardSlice(DATA_DIR, deckParam, cardId);
-    if (!slice) {
+    const resolved = resolveCardImageFile(DATA_DIR, deckParam, cardId);
+    if (!resolved) {
       res.redirect(302, `https://picsum.photos/seed/miaoyu${cardId}/280/420`);
       return;
     }
-    const buf = await getNormalizedSheetBufferForFile(slice.filePath);
-    if (!buf) {
+    const tile = await getCardWebpBufferForFile(resolved.filePath);
+    if (!tile) {
       res.redirect(302, `https://picsum.photos/seed/miaoyu${cardId}/280/420`);
       return;
     }
-    const region = tileExtractRegionInSheet(slice.cellIndex);
-    if (!region) {
-      res.status(400).end();
-      return;
-    }
-    const tile = await sharp(buf)
-      .extract(region)
-      .resize(TILE_W, TILE_H, {
-        fit: "contain",
-        position: "center",
-        background: { r: 10, g: 8, b: 12 },
-      })
-      .webp({ quality: 86 })
-      .toBuffer();
     res.setHeader("Content-Type", "image/webp");
     res.setHeader("Cache-Control", "public, max-age=86400");
     res.send(tile);
@@ -178,27 +167,14 @@ app.get("/cards/:deck/:cardId", async (req, res) => {
   }
 });
 
-app.post("/api/generate-deck", jsonParser, async (req, res) => {
+app.post("/api/upload-deck", uploadDeckImages.array("images", 100), async (req, res) => {
   try {
-    const { roomCode, playerId, sessionToken, prompt, stylePrompt, deckKey, openaiApiKey, apiKey } = req.body || {};
-    let userKey = String(openaiApiKey ?? apiKey ?? "")
-      .replace(/[\u200b-\u200d\ufeff]/g, "")
-      .trim();
-    if (/^bearer\s+/i.test(userKey)) userKey = userKey.replace(/^bearer\s+/i, "").trim();
-    userKey = userKey.slice(0, 500);
-    if (userKey.length < 8) {
-      res.status(400).json({ error: "請在畫面上填寫有效的 OpenAI API 金鑰", field: "openaiApiKey" });
-      return;
-    }
-    let code = String(roomCode ?? "")
+    const code = String(req.body?.roomCode ?? "")
       .trim()
       .toUpperCase()
       .replace(/[^A-F0-9]/g, "");
     if (code.length !== 6) {
-      res.status(400).json({
-        error: "房間碼無效（須為 6 位十六進位）。請重新整理頁面或離開房間後再加入。",
-        field: "roomCode",
-      });
+      res.status(400).json({ error: "房間碼無效（須為 6 位十六進位）", field: "roomCode" });
       return;
     }
     const room = rooms.get(code);
@@ -206,49 +182,124 @@ app.post("/api/generate-deck", jsonParser, async (req, res) => {
       res.status(404).json({ error: "找不到房間" });
       return;
     }
-    const pid = String(playerId || "");
-    const tok = String(sessionToken || "");
+    const pid = String(req.body?.playerId || "");
+    const tok = String(req.body?.sessionToken || "");
     if (!room.validateSession(pid, tok)) {
       res.status(401).json({ error: "身分驗證失敗，請重新加入房間" });
       return;
     }
     if (pid !== room.hostId) {
-      res.status(403).json({ error: "僅房主可產製圖庫" });
+      res.status(403).json({ error: "僅房主可上傳圖庫" });
       return;
     }
     if (room.phase !== "lobby") {
-      res.status(409).json({ error: "僅等候廳可產製圖庫" });
-      return;
-    }
-    const ptext = String(stylePrompt ?? prompt ?? "")
-      .trim()
-      .slice(0, 900);
-    if (ptext.length < 2) {
-      res.status(400).json({ error: "請至少輸入 2 個字的畫風／主題", field: "stylePrompt" });
-      return;
-    }
-    const name = sanitizeDeckKey(String(deckKey ?? "").trim());
-    if (!name) {
-      res.status(400).json({
-        error: "請填有效的存檔檔名（須含英文字母或數字，例如 my-deck；不可只用中文或符號）",
-        field: "deckKey",
-      });
+      res.status(409).json({ error: "僅等候廳可上傳圖庫" });
       return;
     }
 
-    const sheetBuf = await fetchGeneratedSheetBuffer(ptext, userKey);
-    const out = await normalizeSheetImageBuffer(sheetBuf, 93);
+    const nameCheck = assertSafeDeckFolderName(String(req.body?.deckKey ?? ""));
+    if (nameCheck.error) {
+      res.status(400).json({ error: nameCheck.error, field: "deckKey" });
+      return;
+    }
+    const folderName = nameCheck.name;
+    if (isBaseDeckKey(folderName)) {
+      res.status(403).json({ error: "origin 為基礎圖庫，不能新增或覆寫" });
+      return;
+    }
+
+    const files = req.files || [];
+    if (!files.length) {
+      res.status(400).json({ error: "請至少選擇一張圖檔（JPG／PNG／WebP）" });
+      return;
+    }
 
     await fs.mkdir(DATA_DIR, { recursive: true });
-    const deckDir = path.join(DATA_DIR, name);
+    const deckDir = path.join(DATA_DIR, folderName);
     await fs.mkdir(deckDir, { recursive: true });
-    const fname = `${Date.now().toString(36)}-${randomBytes(4).toString("hex")}.jpg`;
-    const outPath = path.join(deckDir, fname);
-    await fs.writeFile(outPath, out);
-    invalidateDeckSheetCache(name);
-    room.cardDeck = name;
+
+    let saved = 0;
+    for (const f of files) {
+      const ext = path.extname(f.originalname || "").toLowerCase();
+      if (!/\.(jpe?g|png|webp)$/.test(ext)) continue;
+      const fname = `${Date.now().toString(36)}-${randomBytes(4).toString("hex")}${ext}`;
+      await fs.writeFile(path.join(deckDir, fname), f.buffer);
+      saved += 1;
+    }
+
+    if (saved === 0) {
+      res.status(400).json({ error: "沒有可存的圖檔（僅支援 JPG／PNG／WebP）" });
+      return;
+    }
+
+    invalidateDeckImageCache(folderName);
+    room.cardDeck = folderName;
     broadcast(room);
-    res.json({ ok: true, deckKey: name });
+    res.json({ ok: true, deckKey: folderName, count: saved });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+app.post("/api/delete-deck", jsonParser, async (req, res) => {
+  try {
+    const code = String(req.body?.roomCode ?? "")
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-F0-9]/g, "");
+    if (code.length !== 6) {
+      res.status(400).json({ error: "房間碼無效（須為 6 位十六進位）", field: "roomCode" });
+      return;
+    }
+    const room = rooms.get(code);
+    if (!room) {
+      res.status(404).json({ error: "找不到房間" });
+      return;
+    }
+    const pid = String(req.body?.playerId || "");
+    const tok = String(req.body?.sessionToken || "");
+    if (!room.validateSession(pid, tok)) {
+      res.status(401).json({ error: "身分驗證失敗，請重新加入房間" });
+      return;
+    }
+    if (pid !== room.hostId) {
+      res.status(403).json({ error: "僅房主可刪除圖庫" });
+      return;
+    }
+    if (room.phase !== "lobby") {
+      res.status(409).json({ error: "僅等候廳可刪除圖庫" });
+      return;
+    }
+
+    const deckKey = String(req.body?.deckKey || "").trim();
+    if (!deckKey) {
+      res.status(400).json({ error: "請指定要刪除的圖庫" });
+      return;
+    }
+    if (isBaseDeckKey(deckKey)) {
+      res.status(403).json({ error: "origin 為基礎圖庫，不可刪除" });
+      return;
+    }
+    const folder = resolveDeckFolder(DATA_DIR, deckKey);
+    if (!folder) {
+      res.status(404).json({ error: "找不到該圖庫資料夾" });
+      return;
+    }
+    const baseName = path.basename(folder);
+    if (isBaseDeckKey(baseName)) {
+      res.status(403).json({ error: "origin 為基礎圖庫，不可刪除" });
+      return;
+    }
+
+    invalidateDeckImageCache(baseName);
+    await fs.rm(folder, { recursive: true, force: true });
+
+    if (room.cardDeck === baseName || room.cardDeck === deckKey) {
+      room.cardDeck = pickDefaultDeckKey(DATA_DIR);
+    }
+    broadcast(room);
+    res.json({ ok: true, deleted: baseName, cardDeck: room.cardDeck });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: String(e.message || e) });
@@ -424,6 +475,13 @@ wss.on("connection", (ws) => {
 
     if (msg.type === "submit_vote") {
       const err = room.submitVote(playerId, msg.slotIndex).error;
+      if (err) safeSend({ type: "error", message: err });
+      else broadcast(room);
+      return;
+    }
+
+    if (msg.type === "confirm_next_round") {
+      const err = room.confirmNextRound(playerId).error;
       if (err) safeSend({ type: "error", message: err });
       else broadcast(room);
       return;

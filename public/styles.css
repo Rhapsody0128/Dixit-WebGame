@@ -436,6 +436,12 @@ input:focus {
   margin: 0.75rem 0 1rem;
 }
 
+.phase-meta {
+  margin: -0.35rem 0 0.75rem;
+  font-size: 0.88rem;
+  color: #efe2d5;
+}
+
 .player-list {
   list-style: none;
   padding: 0;
@@ -604,6 +610,42 @@ input:focus {
   font-size: 0.95rem;
   color: var(--muted);
   font-weight: 600;
+}
+
+.submit-progress {
+  margin-top: 2rem;
+}
+
+.submit-progress-list {
+  list-style: none;
+  margin-bottom: 2rem;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.submit-progress-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.45rem 0.65rem;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(10, 8, 12, 0.35);
+  font-size: 0.84rem;
+}
+
+.submit-progress-list .status {
+  color: var(--muted);
+}
+
+.submit-progress-list .status.done {
+  color: #bedfbe;
+}
+
+.submit-progress-list .status.info {
+  color: #d6c7ec;
 }
 
 .hand-hint {
@@ -1099,6 +1141,60 @@ input:focus {
   margin: 0.5rem 0 0.35rem;
   font-size: 0.82rem;
   font-weight: 700;
+  color: var(--muted);
+}
+
+/* 與投票區 .vote-grid 相同：圖卡視覺大小一致 */
+.modal-reveal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.85rem;
+  margin-bottom: 0.5rem;
+}
+
+.modal-reveal-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  overflow: visible;
+}
+
+.modal-reveal-media {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 2px solid var(--line);
+  background: #0a080c;
+  aspect-ratio: 280 / 420;
+}
+
+.modal-reveal-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.round-summary-next-heading {
+  margin-top: 1rem;
+}
+
+.modal-reveal-text {
+  padding: 0.55rem 0.65rem 0.6rem;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.modal-reveal-text p {
+  margin: 0;
+  font-size: 0.84rem;
+}
+
+.modal-reveal-text .owner {
+  color: #f1e5d7;
+}
+
+.modal-reveal-text .voters {
   color: var(--muted);
 }
 

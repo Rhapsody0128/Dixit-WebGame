@@ -25,6 +25,7 @@ const SESSION_KEY = "miaoyu_session_v1";
 const MAX_RECONNECT = 15;
 
 const QUICK_EMOJIS = ["😂", "❤️", "👍", "😮", "🎉", "🔥", "👏", "🤔", "💀", "🙏", "⭐", "😍", "🥰", "😭", "✨", "🤣", "💯"];
+const BASE_DECK_KEY = "origin";
 
 const el = (id) => document.getElementById(id);
 
@@ -85,13 +86,11 @@ let pendingResume = false;
 let intentionalDisconnect = false;
 let reconnectAttempts = 0;
 let reconnectTimer = null;
-let dismissedVoteRevealId = 0;
-let currentOpenVoteRevealId = null;
 let lastChatSendAt = 0;
 let selectedVoteSlotIndex = null;
 let votePickConfirmed = false;
-/** 等候廳「產製圖庫」折疊區是否展開（預設收合，只顯示選圖庫＋套用） */
-let deckGenPanelExpanded = false;
+/** 等候廳「上傳圖庫」折疊區是否展開（預設收合） */
+let deckUploadPanelExpanded = false;
 
 function wsUrl() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
@@ -212,6 +211,10 @@ function formatChatTime(ts) {
   }
 }
 
+function isBaseDeckKey(raw) {
+  return String(raw || "").trim().toLowerCase() === BASE_DECK_KEY;
+}
+
 function renderChat() {
   const log = el("chat-log");
   log.innerHTML = "";
@@ -319,7 +322,7 @@ function connectWebSocket() {
       return;
     }
     if (data.type === "left_room") {
-      deckGenPanelExpanded = false;
+      deckUploadPanelExpanded = false;
       clearSession();
       setRouteToLobby();
       playerId = null;
@@ -331,7 +334,7 @@ function connectWebSocket() {
       return;
     }
     if (data.type === "joined") {
-      deckGenPanelExpanded = false;
+      deckUploadPanelExpanded = false;
       pendingResume = false;
       reconnectAttempts = 0;
       playerId = data.playerId;
@@ -442,9 +445,7 @@ function renderRoom(state) {
     const deckKeyOf = (e) => (typeof e === "string" ? e : e?.key ?? "");
     const cur = decks.find((e) => deckKeyOf(e) === state.cardDeck);
     const detail =
-      cur && typeof cur === "object" && typeof cur.cards === "number"
-        ? ` — ${cur.cards} 張牌（${cur.sheets} 張九宮圖）`
-        : "";
+      cur && typeof cur === "object" && typeof cur.cards === "number" ? ` — ${cur.cards} 張圖（一檔一卡）` : "";
     el("deck-active-label").textContent = `本房間圖庫：${state.cardDeck || "—"}${detail}（${n} 組卡組資料夾）`;
     const isHost = playerId === state.hostId;
     el("deck-host-controls").classList.toggle("hidden", !isHost);
@@ -465,22 +466,30 @@ function renderRoom(state) {
       if (!decks.length) {
         const o = document.createElement("option");
         o.value = "";
-        o.textContent = "（尚無圖檔，請產製或放入 data）";
+        o.textContent = "（尚無圖檔，請上傳或放入 data）";
         sel.appendChild(o);
       }
-      const coll = el("deck-gen-collapsible");
-      const toggle = el("btn-deck-gen-toggle");
-      if (coll) coll.classList.toggle("hidden", !deckGenPanelExpanded);
+      const coll = el("deck-upload-collapsible");
+      const toggle = el("btn-deck-upload-toggle");
+      if (coll) coll.classList.toggle("hidden", !deckUploadPanelExpanded);
       if (toggle) {
-        toggle.textContent = deckGenPanelExpanded ? "收合產製區" : "展開：產製圖庫…";
-        toggle.setAttribute("aria-expanded", deckGenPanelExpanded ? "true" : "false");
-        toggle.setAttribute("aria-controls", "deck-gen-collapsible");
+        toggle.textContent = deckUploadPanelExpanded ? "收合上傳區" : "展開：上傳圖庫…";
+        toggle.setAttribute("aria-expanded", deckUploadPanelExpanded ? "true" : "false");
+        toggle.setAttribute("aria-controls", "deck-upload-collapsible");
       }
 
-      const btnGen = el("btn-generate-deck");
-      if (btnGen) {
-        btnGen.disabled = false;
-        btnGen.removeAttribute("title");
+      const btnUp = el("btn-upload-deck");
+      if (btnUp) {
+        btnUp.disabled = false;
+        btnUp.removeAttribute("title");
+      }
+      const btnDel = el("btn-delete-deck");
+      if (btnDel) {
+        const picked = sel?.value || state.cardDeck;
+        const lock = isBaseDeckKey(picked);
+        btnDel.disabled = lock;
+        if (lock) btnDel.title = "origin 為基礎圖庫，不可刪除";
+        else btnDel.removeAttribute("title");
       }
     }
   }
@@ -494,79 +503,142 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;");
 }
 
-function closeVoteRevealModal() {
-  el("vote-result-modal").classList.add("hidden");
-  if (currentOpenVoteRevealId != null) {
-    dismissedVoteRevealId = currentOpenVoteRevealId;
-    currentOpenVoteRevealId = null;
-  }
-}
-
-function maybeShowVoteRevealModal(state) {
+function renderRoundSummary(state) {
   const vr = state.lastRoundSummary?.voteReveal;
-  if (!vr?.id) return;
-  if (vr.id === dismissedVoteRevealId) return;
-  if (currentOpenVoteRevealId === vr.id) return;
-
-  currentOpenVoteRevealId = vr.id;
+  const block = el("block-round-summary");
+  const grid = el("round-summary-grid");
+  if (!block || !grid || !vr?.id) {
+    if (block) block.classList.add("hidden");
+    if (grid) grid.innerHTML = "";
+    return;
+  }
   const deltas = vr.scoreDeltas || {};
   const rawDelta = deltas[playerId] ?? deltas[String(playerId)];
   const myDelta = rawDelta != null && rawDelta !== "" ? Number(rawDelta) : 0;
   let myLine = "你本回合沒有加分。";
   if (Number.isFinite(myDelta) && myDelta > 0) myLine = `你本回合 +${myDelta} 分。`;
   else if (Number.isFinite(myDelta) && myDelta < 0) myLine = `你本回合 ${myDelta} 分。`;
-  el("vote-result-my").textContent = myLine;
-  el("vote-result-sub").textContent = `上回合說書人：${vr.roundStorytellerName || ""}`;
+  el("round-summary-my").textContent = myLine;
+  el("round-summary-sub").textContent = `上回合說書人：${vr.roundStorytellerName || ""}`;
+  el("round-summary-rule").textContent = state.lastRoundSummary.rule || "";
 
-  el("vote-result-rule").textContent = state.lastRoundSummary.rule || "";
-
-  const body = el("vote-result-body");
-  body.innerHTML = "";
-  const ul = document.createElement("ul");
-  ul.className = "modal-list";
-  for (const line of vr.voterLines || []) {
-    const li = document.createElement("li");
-    li.textContent = line;
-    ul.appendChild(li);
+  const nextList = el("round-summary-next-list");
+  if (nextList) {
+    nextList.innerHTML = "";
+    let rows = Array.isArray(state.nextRoundProgress) ? state.nextRoundProgress : [];
+    if (!rows.length && Array.isArray(state.players)) {
+      const readySet = new Set(state.nextRoundReadyPlayers || []);
+      rows = state.players.map((p) => ({
+        id: p.id,
+        name: p.name,
+        done: readySet.has(p.id),
+      }));
+    }
+    for (const row of rows) {
+      const li = document.createElement("li");
+      const who = document.createElement("span");
+      who.textContent = `${row.name || "玩家"}${row.id === playerId ? "（你）" : ""}`;
+      const status = document.createElement("span");
+      status.className = `status${row.done ? " done" : ""}`;
+      status.textContent = row.done ? "已按下一步" : "尚未按下一步";
+      li.appendChild(who);
+      li.appendChild(status);
+      nextList.appendChild(li);
+    }
   }
-  body.appendChild(ul);
+
+  const btn = el("btn-next-round");
+  if (btn) {
+    btn.disabled = Boolean(state.myNextRoundReady);
+    btn.textContent = state.myNextRoundReady ? "已確認，等待其他玩家" : "下一步：確認進入下一回合";
+  }
 
   const bySlot = vr.bySlot || [];
+  grid.innerHTML = "";
   if (bySlot.length) {
-    const cap = document.createElement("p");
-    cap.className = "modal-cap";
-    cap.textContent = "依圖卡（牌主與投票者）";
-    body.appendChild(cap);
-    const ul2 = document.createElement("ul");
-    ul2.className = "modal-list";
     for (const row of bySlot) {
-      const li = document.createElement("li");
+      const card = document.createElement("div");
+      card.className = "modal-reveal-card";
+      const media = document.createElement("div");
+      media.className = "modal-reveal-media";
+      const img = document.createElement("img");
+      img.className = "modal-reveal-img";
+      img.src = appUrl(row.imageUrl);
+      img.alt = `揭曉圖卡 ${row.slotIndex + 1}`;
+      media.appendChild(img);
+      card.appendChild(media);
+      const text = document.createElement("div");
+      text.className = "modal-reveal-text";
+      const owner = document.createElement("p");
+      owner.className = "owner";
       const tag = row.isStorytellerCard ? "（說書人牌）" : "";
-      const voters = (row.voterNames || []).length ? row.voterNames.join("、") : "無人";
-      li.textContent = `「${row.ownerName}」的圖${tag}：${voters}`;
-      ul2.appendChild(li);
+      owner.textContent = `出牌者：${row.ownerName}${tag}`;
+      const voters = (row.voterNames || []).length ? row.voterNames.join("、") : "X";
+      const votersLine = document.createElement("p");
+      votersLine.className = "voters";
+      votersLine.textContent = `投票者：${voters}`;
+      text.appendChild(owner);
+      text.appendChild(votersLine);
+      card.appendChild(text);
+      grid.appendChild(card);
     }
-    body.appendChild(ul2);
   }
+  block.classList.remove("hidden");
+}
 
-  const storyBox = el("vote-result-story-box");
-  const storyUl = el("vote-result-story-list");
-  if (playerId === vr.roundStorytellerId) {
-    storyBox.classList.remove("hidden");
-    storyUl.innerHTML = "";
-    for (const line of vr.storytellerNudges || []) {
-      const li = document.createElement("li");
-      li.textContent = line;
-      storyUl.appendChild(li);
+function renderSubmitProgress(state) {
+  const block = el("block-submit-progress");
+  const list = el("submit-progress-list");
+  if (!block || !list) return;
+  const rows = Array.isArray(state.submitProgress) ? state.submitProgress : [];
+  if (!rows.length) {
+    block.classList.add("hidden");
+    list.innerHTML = "";
+    return;
+  }
+  list.innerHTML = "";
+  for (const row of rows) {
+    const li = document.createElement("li");
+    const who = document.createElement("span");
+    who.textContent = `${row.name || "玩家"}${row.id === playerId ? "（你）" : ""}`;
+    const status = document.createElement("span");
+    status.className = `status${row.done ? " done" : ""}`;
+    status.textContent = row.done ? "已選牌" : "尚未選牌";
+    li.appendChild(who);
+    li.appendChild(status);
+    list.appendChild(li);
+  }
+  block.classList.remove("hidden");
+}
+
+function renderVoteProgress(state) {
+  const block = el("block-vote-progress");
+  const list = el("vote-progress-list");
+  if (!block || !list) return;
+  const rows = Array.isArray(state.voteProgress) ? state.voteProgress : [];
+  if (!rows.length) {
+    block.classList.add("hidden");
+    list.innerHTML = "";
+    return;
+  }
+  list.innerHTML = "";
+  for (const row of rows) {
+    const li = document.createElement("li");
+    const who = document.createElement("span");
+    who.textContent = `${row.name || "玩家"}${row.id === playerId ? "（你）" : ""}`;
+    const status = document.createElement("span");
+    if (!row.canVote) {
+      status.className = "status info";
+      status.textContent = "說書人不投票";
+    } else {
+      status.className = `status${row.done ? " done" : ""}`;
+      status.textContent = row.done ? "已投票" : "尚未投票";
     }
-  } else {
-    storyBox.classList.add("hidden");
+    li.appendChild(who);
+    li.appendChild(status);
+    list.appendChild(li);
   }
-
-  el("vote-result-detail").classList.add("hidden");
-  el("vote-result-toggle-detail").textContent = "展開：誰選了誰的牌";
-
-  el("vote-result-modal").classList.remove("hidden");
+  block.classList.remove("hidden");
 }
 
 function renderGame(state) {
@@ -598,10 +670,21 @@ function renderGame(state) {
   const blockSubmitWait = el("block-submit-wait");
   const blockVote = el("block-vote");
   const blockSummary = el("block-summary");
+  const blockRoundSummary = el("block-round-summary");
   const blockGameOver = el("block-game-over");
+  const storytellerDisplay = el("storyteller-display");
+  const submitProgressBlock = el("block-submit-progress");
+  const voteProgressBlock = el("block-vote-progress");
+
+  const stId = state.storytellerId;
+  const storyteller = (state.players || []).find((p) => p.id === stId);
+  const stName = storyteller?.name || "未知";
 
   if (state.phase === "gameover") {
-    maybeShowVoteRevealModal(state);
+    if (storytellerDisplay) storytellerDisplay.classList.add("hidden");
+    if (submitProgressBlock) submitProgressBlock.classList.add("hidden");
+    if (voteProgressBlock) voteProgressBlock.classList.add("hidden");
+    if (blockRoundSummary) blockRoundSummary.classList.add("hidden");
     clue.classList.add("hidden");
     blockClue.classList.add("hidden");
     blockHand.classList.add("hidden");
@@ -649,6 +732,11 @@ function renderGame(state) {
 
   if (blockGameOver) blockGameOver.classList.add("hidden");
 
+  if (storytellerDisplay) {
+    storytellerDisplay.textContent = `本回合說書人：${stName}${stId === playerId ? "（你）" : ""}`;
+    storytellerDisplay.classList.remove("hidden");
+  }
+
   if (state.phase !== "vote") {
     selectedVoteSlotIndex = null;
     votePickConfirmed = false;
@@ -660,9 +748,11 @@ function renderGame(state) {
   blockSubmitWait.classList.add("hidden");
   blockVote.classList.add("hidden");
   blockSummary.classList.add("hidden");
+  if (blockRoundSummary) blockRoundSummary.classList.add("hidden");
+  if (submitProgressBlock) submitProgressBlock.classList.add("hidden");
+  if (voteProgressBlock) voteProgressBlock.classList.add("hidden");
   el("vote-wait").classList.add("hidden");
 
-  const stId = state.storytellerId;
   const imStory = playerId === stId;
 
   if (state.currentClue) {
@@ -683,7 +773,6 @@ function renderGame(state) {
     }
     el("btn-send-card").classList.add("hidden");
     renderHand(state, "clue");
-    maybeShowVoteRevealModal(state);
     return;
   }
 
@@ -702,6 +791,7 @@ function renderGame(state) {
       renderHand(state, "submit");
       el("btn-send-card").classList.remove("hidden");
     }
+    renderSubmitProgress(state);
     return;
   }
 
@@ -713,6 +803,15 @@ function renderGame(state) {
     blockHand.classList.add("hidden");
     blockVote.classList.remove("hidden");
     renderVote(state, imStory);
+    renderVoteProgress(state);
+    return;
+  }
+
+  if (state.phase === "round_summary") {
+    title.textContent = "回合結算";
+    desc.textContent = "確認後才會進入下一回合。";
+    blockHand.classList.add("hidden");
+    renderRoundSummary(state);
     return;
   }
 
@@ -987,14 +1086,14 @@ el("btn-return-lobby")?.addEventListener("click", () => {
   send({ type: "return_to_lobby" });
 });
 
-el("btn-deck-gen-toggle").addEventListener("click", () => {
-  deckGenPanelExpanded = !deckGenPanelExpanded;
-  const coll = el("deck-gen-collapsible");
-  const toggle = el("btn-deck-gen-toggle");
-  if (coll) coll.classList.toggle("hidden", !deckGenPanelExpanded);
+el("btn-deck-upload-toggle").addEventListener("click", () => {
+  deckUploadPanelExpanded = !deckUploadPanelExpanded;
+  const coll = el("deck-upload-collapsible");
+  const toggle = el("btn-deck-upload-toggle");
+  if (coll) coll.classList.toggle("hidden", !deckUploadPanelExpanded);
   if (toggle) {
-    toggle.textContent = deckGenPanelExpanded ? "收合產製區" : "展開：產製圖庫…";
-    toggle.setAttribute("aria-expanded", deckGenPanelExpanded ? "true" : "false");
+    toggle.textContent = deckUploadPanelExpanded ? "收合上傳區" : "展開：上傳圖庫…";
+    toggle.setAttribute("aria-expanded", deckUploadPanelExpanded ? "true" : "false");
   }
 });
 
@@ -1008,20 +1107,20 @@ el("btn-apply-deck").addEventListener("click", () => {
   send({ type: "set_card_deck", deckKey: v });
 });
 
-el("btn-generate-deck").addEventListener("click", async () => {
-  const openaiApiKey = el("input-openai-api-key")?.value?.trim() || "";
-  if (openaiApiKey.length < 8) {
-    toast("請填寫 OpenAI API 金鑰");
+el("btn-upload-deck").addEventListener("click", async () => {
+  const deckName = el("input-upload-deck-name")?.value?.trim() || "";
+  const fileInput = el("input-upload-deck-files");
+  const files = fileInput?.files;
+  if (!deckName) {
+    toast("請填新圖庫資料夾名稱");
     return;
   }
-  const stylePrompt = el("input-deck-style")?.value?.trim() || "";
-  const deckName = el("input-deck-name")?.value?.trim() || "";
-  if (stylePrompt.length < 2) {
-    toast("請至少輸入 2 個字的畫風／主題");
+  if (isBaseDeckKey(deckName)) {
+    toast("origin 為基礎圖庫，不能新增或覆寫");
     return;
   }
-  if (!deckName || deckName.length < 2) {
-    toast("請填存檔檔名");
+  if (!files?.length) {
+    toast("請至少選擇一張圖檔");
     return;
   }
   const sess = loadSession();
@@ -1034,38 +1133,81 @@ el("btn-generate-deck").addEventListener("click", async () => {
     toast("房間碼異常，請離開房間後重新加入");
     return;
   }
-  const status = el("deck-gen-status");
-  const btn = el("btn-generate-deck");
+  const status = el("deck-upload-status");
+  const btn = el("btn-upload-deck");
   status.classList.remove("hidden");
-  status.textContent = "產圖中（單張 3×3 九宮，將存入卡組資料夾並切出 9 張牌）…";
+  status.textContent = "上傳中…";
   btn.disabled = true;
   try {
-    const r = await fetch(appUrl("/api/generate-deck"), {
+    const fd = new FormData();
+    fd.append("roomCode", rc);
+    fd.append("playerId", playerId);
+    fd.append("sessionToken", sess.sessionToken);
+    fd.append("deckKey", deckName);
+    for (let i = 0; i < files.length; i++) fd.append("images", files[i]);
+
+    const r = await fetch(appUrl("/api/upload-deck"), { method: "POST", body: fd });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      toast(j.error || `上傳失敗（${r.status}）`);
+      status.textContent = j.error || "失敗";
+      return;
+    }
+    toast(`已上傳 ${j.count ?? "?"} 張並套用圖庫「${j.deckKey || deckName}」`);
+    status.textContent = "完成，已套用新圖庫。";
+    el("input-upload-deck-name").value = "";
+    if (fileInput) fileInput.value = "";
+  } catch (e) {
+    toast("網路錯誤，上傳失敗");
+    status.textContent = String(e.message || e);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+el("btn-delete-deck").addEventListener("click", async () => {
+  const sel = el("select-card-deck");
+  const deckKey = sel?.value?.trim() || "";
+  if (!deckKey) {
+    toast("請先選擇要刪除的圖庫");
+    return;
+  }
+  if (isBaseDeckKey(deckKey)) {
+    toast("origin 為基礎圖庫，不可刪除");
+    return;
+  }
+  if (!confirm(`確定刪除圖庫「${deckKey}」嗎？這會刪除 data/${deckKey}/ 下所有圖檔。`)) return;
+  const sess = loadSession();
+  if (!roomCode || !playerId || !sess?.sessionToken) {
+    toast("房間狀態異常，請重新加入");
+    return;
+  }
+  const rc = String(roomCode).trim().toUpperCase().replace(/[^A-F0-9]/g, "");
+  if (rc.length !== 6) {
+    toast("房間碼異常，請離開房間後重新加入");
+    return;
+  }
+  const btn = el("btn-delete-deck");
+  btn.disabled = true;
+  try {
+    const r = await fetch(appUrl("/api/delete-deck"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         roomCode: rc,
         playerId,
         sessionToken: sess.sessionToken,
-        openaiApiKey,
-        stylePrompt,
-        deckKey: deckName,
+        deckKey,
       }),
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) {
-      toast(j.error || `產圖失敗（${r.status}）`);
-      status.textContent = j.error || "失敗";
+      toast(j.error || `刪除失敗（${r.status}）`);
       return;
     }
-    toast(`已將九宮圖存入資料夾「${j.deckKey || deckName}」並套用`);
-    status.textContent = "完成，已套用新圖庫。";
-    el("input-deck-style").value = "";
-    const keyIn = el("input-openai-api-key");
-    if (keyIn) keyIn.value = "";
+    toast(`已刪除圖庫「${j.deleted || deckKey}」`);
   } catch (e) {
-    toast("網路錯誤，產圖失敗");
-    status.textContent = String(e.message || e);
+    toast("網路錯誤，刪除失敗");
   } finally {
     btn.disabled = false;
   }
@@ -1093,11 +1235,11 @@ el("btn-send-card").addEventListener("click", () => {
   send({ type: "submit_card", cardId: selectedCardId });
 });
 
+el("btn-next-round")?.addEventListener("click", () => {
+  send({ type: "confirm_next_round" });
+});
+
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !el("vote-result-modal").classList.contains("hidden")) {
-    closeVoteRevealModal();
-    return;
-  }
   if (e.key !== "Enter" || e.shiftKey) return;
   if (e.isComposing || e.keyCode === 229) return;
   if (el("block-clue") && !el("block-clue").classList.contains("hidden")) {
@@ -1136,11 +1278,6 @@ el("input-clue").addEventListener("compositionend", () => {
   delete el("input-clue").dataset.ime;
 });
 
-el("vote-result-close").addEventListener("click", () => closeVoteRevealModal());
-el("vote-result-modal").addEventListener("click", (e) => {
-  if (e.target.classList.contains("modal-backdrop")) closeVoteRevealModal();
-});
-
 window.addEventListener("hashchange", () => {
   applyRouteToForm();
 });
@@ -1155,9 +1292,3 @@ el("btn-sfx-toggle")?.addEventListener("click", () => {
 initChatEmojiDrawer();
 initVoteConfirmButtons();
 connectWebSocket();
-
-el("vote-result-toggle-detail").addEventListener("click", () => {
-  const d = el("vote-result-detail");
-  d.classList.toggle("hidden");
-  el("vote-result-toggle-detail").textContent = d.classList.contains("hidden") ? "展開：誰選了誰的牌" : "收合詳情";
-});

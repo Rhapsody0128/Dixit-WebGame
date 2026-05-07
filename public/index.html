@@ -77,53 +77,25 @@
             </label>
             <div class="row-actions deck-deck-row-main">
               <button type="button" id="btn-apply-deck" class="btn ghost">套用圖庫</button>
-              <button type="button" id="btn-deck-gen-toggle" class="btn ghost">展開：產製圖庫…</button>
+              <button type="button" id="btn-delete-deck" class="btn ghost">刪除自訂圖庫</button>
+              <button type="button" id="btn-deck-upload-toggle" class="btn ghost">展開：上傳圖庫…</button>
             </div>
-            <div id="deck-gen-collapsible" class="deck-gen-collapsible hidden">
-              <div id="deck-gen-panel" class="deck-gen-panel">
-                <section class="deck-prompt-block" aria-labelledby="deck-prompt-heading">
-                  <h4 id="deck-prompt-heading" class="deck-prompt-heading">產圖提示詞</h4>
-                  <p class="micro deck-ai-note">
-                    <strong>你只要填畫風／意象。</strong>系統提示已包含：單張 3×3 無縫九宮、格線對齊、牌面<strong>內縮留白</strong>、說書人式一圖多義、禁文字等。
-                  </p>
-                  <label class="field">
-                    <span>風格與主題（併入送給 AI 的 [F] 區）</span>
-                    <textarea
-                      id="input-deck-style"
-                      rows="4"
-                      maxlength="800"
-                      placeholder="例如：暖色粉彩、童話邊陲、柔焦光影、略帶超現實…"
-                      autocomplete="off"
-                    ></textarea>
-                  </label>
-                </section>
-
-                <section class="deck-api-block" aria-label="OpenAI 與存檔">
-                  <p class="micro deck-openai-link-row">
-                    <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" class="linkish"
-                      >取得 OpenAI API 金鑰</a
-                    >
-                    <span class="deck-openai-link-note">（新分頁開啟）</span>
-                  </p>
-                  <label class="field">
-                    <span>OpenAI API 金鑰（僅此請求使用，不會存進伺服器檔案）</span>
-                    <input
-                      id="input-openai-api-key"
-                      type="password"
-                      maxlength="500"
-                      placeholder="sk-…"
-                      autocomplete="off"
-                      spellcheck="false"
-                    />
-                  </label>
-                  <p class="micro deck-key-hint">金鑰只會用來呼叫 OpenAI 產<strong>一張</strong>九宮圖；請勿與他人分享畫面。</p>
-                  <label class="field">
-                    <span>卡組資料夾名稱（英數與連字；會建立或沿用 <code>data/名稱/</code>，並寫入一張 JPG）</span>
-                    <input id="input-deck-name" type="text" maxlength="40" placeholder="my-deck" autocomplete="off" />
-                  </label>
-                  <button type="button" id="btn-generate-deck" class="btn primary">產製一張九宮並存入卡組</button>
-                  <p id="deck-gen-status" class="hint micro hidden"></p>
-                </section>
+            <div id="deck-upload-collapsible" class="deck-gen-collapsible hidden">
+              <div id="deck-upload-panel" class="deck-gen-panel">
+                <p class="micro deck-ai-note">
+                  每張圖檔即一張牌（不再裁切九宮）。會在伺服器建立 <code>data/資料夾名/</code> 並寫入你選的圖片。開局時若該資料夾超過 84 張，會<strong>隨機抽 84 張</strong>當本局牌池。
+                </p>
+                <p class="micro deck-ai-note">`origin` 為基礎圖庫：不可新增、不可刪除。</p>
+                <label class="field">
+                  <span>新圖庫資料夾名稱（英數、底線、連字、句點；例如 <code>my-pack</code> 或 <code>1.origin</code>）</span>
+                  <input id="input-upload-deck-name" type="text" maxlength="64" placeholder="my-pack" autocomplete="off" />
+                </label>
+                <label class="field">
+                  <span>選擇圖檔（可多選，JPG／PNG／WebP）</span>
+                  <input id="input-upload-deck-files" type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" multiple />
+                </label>
+                <button type="button" id="btn-upload-deck" class="btn primary">上傳並套用此圖庫</button>
+                <p id="deck-upload-status" class="hint micro hidden"></p>
               </div>
             </div>
           </div>
@@ -145,7 +117,12 @@
           <p id="game-deck-hint" class="game-deck-hint micro hidden"></p>
         </div>
         <p id="phase-desc" class="lead"></p>
+        <p id="storyteller-display" class="phase-meta hidden"></p>
         <p id="clue-display" class="clue hidden"></p>
+        <div id="block-submit-progress" class="game-block submit-progress hidden">
+          <h3 class="sub">選牌進度</h3>
+          <ul id="submit-progress-list" class="submit-progress-list"></ul>
+        </div>
 
         <div id="block-clue" class="game-block hidden">
           <label class="field">
@@ -179,8 +156,23 @@
           </div>
           <p id="vote-wait" class="waiting hidden">已投票，等待其他人…</p>
         </div>
+        <div id="block-vote-progress" class="game-block submit-progress hidden">
+          <h3 class="sub">投票進度</h3>
+          <ul id="vote-progress-list" class="submit-progress-list"></ul>
+        </div>
 
         <div id="block-summary" class="game-block summary hidden"></div>
+        <div id="block-round-summary" class="game-block hidden">
+          <h3 class="sub">本回合揭曉</h3>
+          <p id="round-summary-my" class="modal-my"></p>
+          <p id="round-summary-sub" class="modal-sub"></p>
+          <p id="round-summary-rule" class="modal-rule"></p>
+          <p class="modal-cap">每張圖卡的牌主與投票者</p>
+          <div id="round-summary-grid" class="modal-reveal-grid"></div>
+          <h3 class="sub round-summary-next-heading">下一回合確認</h3>
+          <ul id="round-summary-next-list" class="submit-progress-list"></ul>
+          <button type="button" id="btn-next-round" class="btn primary">下一步</button>
+        </div>
 
         <div id="block-game-over" class="game-block game-over hidden" aria-live="polite">
           <h3 class="sub">遊戲結束 · 得分</h3>
@@ -224,25 +216,6 @@
     </div>
 
     <div id="toast" class="toast hidden" role="status"></div>
-
-    <div id="vote-result-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="vote-result-title">
-      <div class="modal-backdrop"></div>
-      <div class="modal-card">
-        <h2 id="vote-result-title" class="modal-title">本回合結算</h2>
-        <p id="vote-result-my" class="modal-my"></p>
-        <p id="vote-result-sub" class="modal-sub"></p>
-        <button type="button" id="vote-result-toggle-detail" class="btn ghost modal-toggle-detail">展開：誰選了誰的牌</button>
-        <div id="vote-result-detail" class="vote-result-detail hidden">
-          <p id="vote-result-rule" class="modal-rule"></p>
-          <div id="vote-result-body" class="vote-result-body"></div>
-          <div id="vote-result-story-box" class="modal-story-box hidden">
-            <h3 class="modal-story-title">上一回合說書人專區</h3>
-            <ul id="vote-result-story-list" class="modal-list"></ul>
-          </div>
-        </div>
-        <button type="button" id="vote-result-close" class="btn primary modal-close-btn">知道了</button>
-      </div>
-    </div>
 
     <script type="module" src="app.js"></script>
   </body>

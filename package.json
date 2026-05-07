@@ -1,18 +1,20 @@
 {
-  "name": "Dixit WebGame",
+  "name": "dixit-webgame",
   "version": "1.0.0",
   "private": true,
   "description": "妙語說書人 — 線上多人 WebSocket 遊戲",
   "type": "module",
   "scripts": {
     "start": "node server/index.js",
-    "dev": "node --watch server/index.js"
+    "dev": "node --watch server/index.js",
+    "ngrok": "ngrok http 3847"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
     "express": "^4.21.0",
+    "multer": "1.4.5-lts.1",
     "sharp": "^0.33.5",
     "ws": "^8.18.0"
   }
